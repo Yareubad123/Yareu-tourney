@@ -1785,6 +1785,15 @@ function renderTournamentList(app){
             <option value="1">1 pt</option>
           </select>
         </div>
+        <div id="tn-pts-draw-row" class="form-group" style="margin:0;">
+          <label class="form-label">Points Per Draw</label>
+          <select id="tn-pts-draw">
+            <option value="1" selected>1 pt (standard)</option>
+            <option value="0">0 pts</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row form-row-2" style="gap:8px;margin-bottom:10px;">
         <div class="form-group" style="margin:0;">
           <label class="form-label">Draw Tiebreaker</label>
           <select id="tn-tiebreaker">
@@ -2262,6 +2271,8 @@ function createTournament(){
   try { const v = document.getElementById('tn-ko-legs')?.value; koLegs = v && v.startsWith('{') ? JSON.parse(v) : Math.max(1,Math.min(2,parseInt(v)||1)); }
   catch(e){ koLegs = 1; }
   const ptsPerWin = parseInt(document.getElementById('tn-pts-win')?.value)||3;
+  const ptsPerDrawRaw = parseInt(document.getElementById('tn-pts-draw')?.value);
+  const ptsPerDraw = isNaN(ptsPerDrawRaw) ? 1 : ptsPerDrawRaw;
   const tiebreaker = document.getElementById('tn-tiebreaker')?.value||'gd';
   const seeded = document.getElementById('tn-seeded')?.checked||false;
   const homeAdvantage = document.getElementById('tn-homeadv')?.checked!==false; // default true
@@ -2298,7 +2309,7 @@ function createTournament(){
   const t={
     id:uid(), name, format, type:pType,
     participantIds: selected, legs,
-    koLegs, ptsPerWin, tiebreaker, homeAdvantage, thirdPlace,
+    koLegs, ptsPerWin, ptsPerDraw, tiebreaker, homeAdvantage, thirdPlace,
     champion:null, created:Date.now()
   };
 
@@ -2499,6 +2510,15 @@ function renderSeasonModalBody(t){
           <option value="1" ${t.ptsPerWin===1?'selected':''}>1 pt</option>
         </select>
       </div>
+      <div id="sm-pts-draw-row" class="form-group" style="margin:0;">
+        <label class="form-label">Points Per Draw</label>
+        <select id="sm-pts-draw">
+          <option value="1" ${t.ptsPerDraw===1||t.ptsPerDraw===undefined?'selected':''}>1 pt (standard)</option>
+          <option value="0" ${t.ptsPerDraw===0?'selected':''}>0 pts</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row form-row-2" style="gap:8px;margin-bottom:10px;">
       <div class="form-group" style="margin:0;">
         <label class="form-label">Draw Tiebreaker</label>
         <select id="sm-tiebreaker">
@@ -2659,6 +2679,8 @@ function confirmStartNextSeason(prevTId){
   const legs = Math.max(1, Math.min(10, parseInt(document.getElementById('sm-legs')?.value)||1));
   let koLegs; try{const v=document.getElementById('sm-ko-legs')?.value;koLegs=v&&v.startsWith('{')?JSON.parse(v):Math.max(1,Math.min(2,parseInt(v)||1));}catch(e){koLegs=1;}
   const ptsPerWin = parseInt(document.getElementById('sm-pts-win')?.value)||3;
+  const ptsPerDrawRaw = parseInt(document.getElementById('sm-pts-draw')?.value);
+  const ptsPerDraw = isNaN(ptsPerDrawRaw) ? 1 : ptsPerDrawRaw;
   const tiebreaker = document.getElementById('sm-tiebreaker')?.value||'gd';
   const homeAdvantage = document.getElementById('sm-homeadv')?.checked!==false;
   const thirdPlace = document.getElementById('sm-third-place')?.checked||false;
@@ -2678,7 +2700,7 @@ function confirmStartNextSeason(prevTId){
   const nt = {
     id: uid(), name, format, type: prev.type,
     participantIds: carriedIds, legs, koLegs, thirdPlace,
-    ptsPerWin, tiebreaker, homeAdvantage,
+    ptsPerWin, ptsPerDraw, tiebreaker, homeAdvantage,
     champion: null, created: Date.now(), previousSeasonId: prev.id
   };
 
@@ -3087,6 +3109,7 @@ function renderTournamentOverview(t){
   const settingsBadges = [];
   if(t.ptsPerWin===2) settingsBadges.push('2-pt wins');
   if(t.ptsPerWin===1) settingsBadges.push('1-pt wins');
+  if(t.ptsPerDraw===0) settingsBadges.push('0-pt draws');
   if(t.tiebreaker==='h2h') settingsBadges.push('H2H tiebreaker');
   else if(t.tiebreaker==='gf') settingsBadges.push('GF tiebreaker');
   if(t.homeAdvantage===false) settingsBadges.push('No home advantage');
@@ -3829,6 +3852,7 @@ function checkLeagueComplete(t){
 
 function recalcStandings(standings, matches, t){
   const ptsW = (t&&t.ptsPerWin) ? t.ptsPerWin : 3;
+  const ptsD = (t&&t.ptsPerDraw!==undefined) ? t.ptsPerDraw : 1;
   const tb = (t&&t.tiebreaker) ? t.tiebreaker : 'gd';
   standings.forEach(s=>{s.p=0;s.w=0;s.d=0;s.l=0;s.gf=0;s.ga=0;s.gd=0;s.pts=0;s.cs=0;});
   matches.filter(m=>m.played).forEach(m=>{
@@ -3840,7 +3864,7 @@ function recalcStandings(standings, matches, t){
     a.gf+=m.aScore;a.ga+=m.hScore;
     if(m.hScore>m.aScore){h.w++;h.pts+=ptsW;a.l++;}
     else if(m.hScore<m.aScore){a.w++;a.pts+=ptsW;h.l++;}
-    else{h.d++;a.d++;h.pts++;a.pts++;}
+    else{h.d++;a.d++;h.pts+=ptsD;a.pts+=ptsD;}
     h.gd=h.gf-h.ga;a.gd=a.gf-a.ga;
     if(m.aScore===0) h.cs++;
     if(m.hScore===0) a.cs++;
@@ -3857,7 +3881,7 @@ function recalcStandings(standings, matches, t){
         h2h.forEach(m=>{
           const aIsHome=m.homeId===a.teamId;
           const aS=aIsHome?m.hScore:m.aScore, bS=aIsHome?m.aScore:m.hScore;
-          if(aS>bS) aH2HPts+=ptsW; else if(bS>aS) bH2HPts+=ptsW; else {aH2HPts++;bH2HPts++;}
+          if(aS>bS) aH2HPts+=ptsW; else if(bS>aS) bH2HPts+=ptsW; else {aH2HPts+=ptsD;bH2HPts+=ptsD;}
         });
         if(bH2HPts!==aH2HPts) return bH2HPts-aH2HPts;
       }
