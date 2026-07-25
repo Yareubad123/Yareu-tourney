@@ -433,6 +433,10 @@ let activeTournamentId = null;
 let activeTournamentTab = 'fixtures';
 let friendlyHomeId = null; // selections for the "set up a friendly" form
 let friendlyAwayId = null;
+let friendlyHomeAdv = true; // whether the home side gets a boost in friendlies (persists as a preference)
+let friendlyDecisive = false; // if true, a drawn friendly goes to extra time then penalties instead of standing as a draw
+let friendlyLabel = ''; // optional free-text name for the friendly, e.g. "Preseason Friendly"
+let friendlySettingsOpen = false; // whether the friendly match-settings panel is expanded
 let activeProfileId = null; // participant whose profile page is open
 let profileFromTab = 'dash'; // which main tab to return to when leaving a profile
 let sim = null; // live simulation state
@@ -592,14 +596,16 @@ function calcInCompStrength(p, tId){
   };
 }
 
-function predictMatch(hId, aId, tId=null){
+function predictMatch(hId, aId, tId=null, homeAdvOverride=null){
   const h = db.participants.find(p=>p.id===hId);
   const a = db.participants.find(p=>p.id===aId);
   if(!h||!a) return {hWin:40,draw:20,aWin:40};
   const t = tId ? db.tournaments.find(x=>x.id===tId) : null;
   // Mirrors initSim's home-advantage rule so predicted percentages match
-  // what the simulation will actually do.
-  const homeBoost = (t&&t.homeAdvantage===false) ? 0 : 4;
+  // what the simulation will actually do. Outside a tournament (a
+  // friendly), homeAdvOverride carries the person's own choice instead.
+  const homeAdvOn = t ? t.homeAdvantage!==false : homeAdvOverride!==false;
+  const homeBoost = homeAdvOn ? 4 : 0;
   const hs = calcInCompStrength(h, tId), as = calcInCompStrength(a, tId);
   const hStr = (hs.att*0.4+hs.mid*0.3+hs.def*0.3)+homeBoost;
   const aStr = (as.att*0.4+as.mid*0.3+as.def*0.3);
@@ -627,11 +633,12 @@ function predictMatch(hId, aId, tId=null){
   return {hWin:hw, draw:dr, aWin:aw};
 }
 
-function initSim(hId, aId, isKnockout, tournamentId){
+function initSim(hId, aId, isKnockout, tournamentId, homeAdvOverride=null){
   const h = db.participants.find(p=>p.id===hId);
   const a = db.participants.find(p=>p.id===aId);
   const t = tournamentId ? db.tournaments.find(x=>x.id===tournamentId) : null;
-  const homeAdv = (t&&t.homeAdvantage===false) ? 0 : 5; // default on
+  const homeAdvOn = t ? t.homeAdvantage!==false : homeAdvOverride!==false;
+  const homeAdv = homeAdvOn ? 5 : 0; // default on
   // Use in-competition strength (not raw calcStrength) so the actual
   // simulation — not just the pre-match prediction percentages — is driven
   // by form within this tournament only.
@@ -891,8 +898,8 @@ function runPenalties(s){
    ===================================================================== */
 let simCb = null; // callback when sim ends: (hScore, aScore, extra) => void
 
-function launchLive(hId, aId, isKnockout, tournamentId, onComplete, legContext=null){
-  sim = initSim(hId, aId, isKnockout, tournamentId);
+function launchLive(hId, aId, isKnockout, tournamentId, onComplete, legContext=null, homeAdvOverride=null){
+  sim = initSim(hId, aId, isKnockout, tournamentId, homeAdvOverride);
   simCb = onComplete;
   // legContext (set only for leg 2 of a two-leg tie): leg 1's scores from
   // each side's perspective, so the live aggregate can be shown and kept
@@ -2505,13 +2512,13 @@ function populateKOLegStages(){
     const isFinal = (i===numRounds-1);
     const prev = document.querySelector(`.ko-stage-check[data-round="${i}"]`);
     const isChecked = prev ? prev.checked : !isFinal;
-    const legText = isFinal ? '1 leg — single match' : (isChecked ? '2 legs' : '1 leg');
+    const legText = isChecked ? '2 legs' : '1 leg';
     html += `<label class="check-item" style="padding:4px 2px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
-      <span><input type="checkbox" class="ko-stage-check" data-round="${i}" ${isChecked&&!isFinal?'checked':''} ${isFinal?'disabled':''} onchange="updateKOLegsInput()"> <span style="font-size:.82rem;">${roundName(i,numRounds)}</span></span>
+      <span><input type="checkbox" class="ko-stage-check" data-round="${i}" ${isChecked?'checked':''} onchange="updateKOLegsInput()"> <span style="font-size:.82rem;">${roundName(i,numRounds)}</span></span>
       <span class="leg-count-tag" data-round="${i}" style="font-size:.7rem;color:var(--text3);white-space:nowrap;">${legText}</span>
     </label>`;
   }
-  html += `<div class="form-hint" style="margin:6px 2px 0;">The Final is always a single match — no second leg.</div>`;
+  html += `<div class="form-hint" style="margin:6px 2px 0;">Any round — including the Final — can be single-match or home-and-away. Two legs uses aggregate score to decide the winner.</div>`;
   container.innerHTML = html;
   updateKOLegsInput();
 }
@@ -2876,13 +2883,13 @@ function populateSMKOLegStages(){
     const isFinal=(i===numRounds-1);
     const prev=document.querySelector(`.sm-ko-stage-check[data-round="${i}"]`);
     const isChecked=prev?prev.checked:!isFinal;
-    const legText = isFinal ? '1 leg — single match' : (isChecked ? '2 legs' : '1 leg');
+    const legText = isChecked ? '2 legs' : '1 leg';
     html+=`<label class="check-item" style="padding:4px 2px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
-      <span><input type="checkbox" class="sm-ko-stage-check" data-round="${i}" ${isChecked&&!isFinal?'checked':''} ${isFinal?'disabled':''} onchange="updateSMKOLegsInput()"> <span style="font-size:.82rem;">${roundName(i,numRounds)}</span></span>
+      <span><input type="checkbox" class="sm-ko-stage-check" data-round="${i}" ${isChecked?'checked':''} onchange="updateSMKOLegsInput()"> <span style="font-size:.82rem;">${roundName(i,numRounds)}</span></span>
       <span class="sm-leg-count-tag" data-round="${i}" style="font-size:.7rem;color:var(--text3);white-space:nowrap;">${legText}</span>
     </label>`;
   }
-  html += `<div class="form-hint" style="margin:6px 2px 0;">The Final is always a single match — no second leg.</div>`;
+  html += `<div class="form-hint" style="margin:6px 2px 0;">Any round — including the Final — can be single-match or home-and-away. Two legs uses aggregate score to decide the winner.</div>`;
   container.innerHTML=html;
   updateSMKOLegsInput();
 }
@@ -3042,7 +3049,7 @@ function renderFriendlies(app){
   if(friendlyAwayId && !eligible.some(p=>p.id===friendlyAwayId)) friendlyAwayId=null;
 
   const canStart = friendlyHomeId && friendlyAwayId && friendlyHomeId!==friendlyAwayId;
-  const pred = canStart ? predictMatch(friendlyHomeId, friendlyAwayId, null) : null;
+  const pred = canStart ? predictMatch(friendlyHomeId, friendlyAwayId, null, friendlyHomeAdv) : null;
 
   let html = `
     <div class="card">
@@ -3072,10 +3079,36 @@ function renderFriendlies(app){
           </select>
         </div>
       </div>
-      ${pred?`<div class="match-prediction" style="margin-top:12px;">
+      ${(friendlyHomeId&&friendlyAwayId)?`<button class="btn btn-ghost btn-sm" style="margin-top:2px;padding-left:0;" onclick="const t=friendlyHomeId;friendlyHomeId=friendlyAwayId;friendlyAwayId=t;render();">⇅ Swap Home/Away</button>`:''}
+      ${pred?`<div class="match-prediction" style="margin-top:10px;">
         ${name(friendlyHomeId)} ${pred.hWin}% · Draw ${pred.draw}% · ${name(friendlyAwayId)} ${pred.aWin}%
         <div class="pred-bar"><div class="pred-h" style="width:${pred.hWin}%"></div><div class="pred-d" style="width:${pred.draw}%"></div><div class="pred-a" style="width:${pred.aWin}%"></div></div>
       </div>`:''}
+
+      <div class="divider"></div>
+      <button class="btn btn-ghost btn-sm" style="padding-left:0;" onclick="toggleFriendlySettings()">${friendlySettingsOpen?'▾':'▸'} Match settings</button>
+      ${friendlySettingsOpen?`
+        <div style="margin-top:8px;">
+          <div class="form-group">
+            <label class="form-label">Match Label (optional)</label>
+            <input id="friendly-label" placeholder="e.g. Preseason Friendly, Grudge Match" value="${friendlyLabel||''}" oninput="friendlyLabel=this.value">
+          </div>
+          <label class="switch-row" style="padding:6px 2px;">
+            <div><div class="switch-label" style="font-size:.82rem;">Home Advantage</div><div class="switch-sub">Home side gets a slight simulation boost</div></div>
+            <div class="switch">
+              <input type="checkbox" ${friendlyHomeAdv?'checked':''} onchange="friendlyHomeAdv=this.checked;render();">
+              <div class="switch-track"><div class="switch-thumb"></div></div>
+            </div>
+          </label>
+          <label class="switch-row" style="padding:6px 2px;">
+            <div><div class="switch-label" style="font-size:.82rem;">Needs a Winner</div><div class="switch-sub">A draw goes to extra time, then penalties, instead of standing</div></div>
+            <div class="switch">
+              <input type="checkbox" ${friendlyDecisive?'checked':''} onchange="friendlyDecisive=this.checked;render();">
+              <div class="switch-track"><div class="switch-thumb"></div></div>
+            </div>
+          </label>
+        </div>
+      `:''}
       <button class="btn btn-primary btn-full" style="margin-top:12px;" ${canStart?'':'disabled style="opacity:.5;"'} onclick="startFriendly()">${db.settings.simulationMode!==false?'▶ Kick Off':'✎ Enter Result'}</button>
       `}
     </div>
@@ -3096,6 +3129,7 @@ function renderFriendlies(app){
         : (f.aet ? `${f.hScore}–${f.aScore} <span style="font-size:.65rem;color:var(--text3);">AET</span>` : `${f.hScore}–${f.aScore}`);
       const dateLabel = f.playedAt ? new Date(f.playedAt).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) : '';
       html+=`<div class="match-card played" style="cursor:pointer;" onclick="openFriendlyRecap('${f.id}')">
+        ${f.label?`<div style="font-size:.68rem;font-weight:700;color:var(--accent2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;text-align:center;">${f.label}</div>`:''}
         <div class="match-body">
           <div class="match-team-name">${h.name}</div>
           <div class="match-score-box">${scoreLabel}</div>
@@ -3108,19 +3142,25 @@ function renderFriendlies(app){
   app.innerHTML = html;
 }
 
+function toggleFriendlySettings(){
+  friendlySettingsOpen = !friendlySettingsOpen;
+  render();
+}
 function startFriendly(){
   if(!friendlyHomeId || !friendlyAwayId || friendlyHomeId===friendlyAwayId) return;
   simIsFriendly = true;
   const playFn = db.settings.simulationMode!==false ? launchLive : openManualEntry;
-  playFn(friendlyHomeId, friendlyAwayId, false, null, (hS,aS,extra)=>{
+  playFn(friendlyHomeId, friendlyAwayId, friendlyDecisive, null, (hS,aS,extra)=>{
     completeFriendly(friendlyHomeId, friendlyAwayId, hS, aS, extra);
-  });
+  }, null, friendlyHomeAdv);
 }
 
 function completeFriendly(hId, aId, hS, aS, extra={}){
   const f = {
     id: uid(),
+    label: (friendlyLabel||'').trim(),
     homeId:hId, awayId:aId,
+    homeAdvantage: friendlyHomeAdv, decisive: friendlyDecisive,
     played:true, hScore:hS, aScore:aS,
     aet:extra.aet||false, penalties:extra.penalties||false,
     penH:extra.penH||0, penA:extra.penA||0,
@@ -3137,6 +3177,7 @@ function completeFriendly(hId, aId, hS, aS, extra={}){
   // running total regardless of where the match happened.
   updateParticipantStats(hId, aId, hS, aS, f.scorers, f.cards);
   simIsFriendly = false;
+  friendlyLabel = ''; // the label is per-match; homeAdv/decisive persist as preferences
   save(); render();
   toast('Friendly result saved');
 }
@@ -3939,6 +3980,7 @@ function renderRecapModal(m, h, a, t){
     </div>` : '';
 
   const html = `
+    ${m.label?`<div style="font-size:.72rem;font-weight:700;color:var(--accent2);text-transform:uppercase;letter-spacing:.05em;text-align:center;margin-bottom:8px;">${m.label}</div>`:''}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
       <div style="flex:1;"><div style="font-weight:700;font-size:.92rem;">${h.name}</div></div>
       <div class="match-score-box" style="font-size:1.1rem;">${scoreLabel}</div>
