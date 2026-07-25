@@ -290,6 +290,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,.c
   <div id="top-bar">
     <h1>🏆 <span>Yareu</span> Tourney</h1>
     <div style="display:flex;gap:8px;">
+      <button class="btn btn-icon" onclick="openSettings()" title="Settings">⚙</button>
       <button class="btn btn-outline btn-sm" onclick="exportData()" title="Download a backup file of all your data">⬇ Backup</button>
       <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-file').click()" title="Restore from a backup file">⬆ Restore</button>
       <input type="file" id="import-file" accept=".json" style="display:none" onchange="importData(this)">
@@ -403,6 +404,22 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,.c
   </div>
 </div>
 
+<!-- Settings Modal -->
+<div id="settings-modal" class="modal-overlay hidden" onclick="if(event.target===this) closeSettings()">
+  <div class="modal-sheet" style="padding-bottom:24px;">
+    <div class="modal-handle"></div>
+    <div id="settings-modal-body"></div>
+  </div>
+</div>
+
+<!-- Manual Result Entry Modal -->
+<div id="manual-modal" class="modal-overlay hidden" onclick="if(event.target===this) closeManualEntry()">
+  <div class="modal-sheet" style="padding-bottom:24px;">
+    <div class="modal-handle"></div>
+    <div id="manual-modal-body"></div>
+  </div>
+</div>
+
 
 <script>
 /* =====================================================================
@@ -445,10 +462,14 @@ function loadDb() {
   if(!data.settings || typeof data.settings!=='object') data.settings = {};
   if(!data.settings.participantType) data.settings.participantType = 'team';
   if(data.settings.dismissedSaveNotice===undefined) data.settings.dismissedSaveNotice = false;
+  // Simulation mode: true = matches are auto-simulated, false = results are
+  // typed in by hand. Defaults to on so existing saves behave the same way
+  // they always did.
+  if(data.settings.simulationMode===undefined) data.settings.simulationMode = true;
   return data;
 }
 function freshDb(){
-  return { participants:[], tournaments:[], friendlies:[], settings:{ participantType:'team', dismissedSaveNotice:false } };
+  return { participants:[], tournaments:[], friendlies:[], settings:{ participantType:'team', dismissedSaveNotice:false, simulationMode:true } };
 }
 let _saveFailed = false;
 function save(){
@@ -517,24 +538,12 @@ function calcStrength(p){
   if(p.strengthEnabled){
     return {att:p.att||60, def:p.def||60, mid:p.mid||60, ovr:p.ovr||60};
   }
-  const st = p.stats;
-  const played = st?.played||0;
-  if(!played){
-    return {att:60, def:60, mid:60, ovr:60};
-  }
-  const winRate = (st.wins + st.draws*0.5) / played; // 0–1
-  const gdPerGame = (st.gf - st.ga) / played;
-  // Map winRate onto a 40-90 range, nudge with GD (clamped).
-  const base = 40 + winRate*50;
-  const gdAdj = Math.max(-12, Math.min(12, gdPerGame*6));
-  const ovr = Math.max(35, Math.min(95, Math.round(base + gdAdj)));
-  // Attack leans toward goals-for, defense toward goals-against.
-  const gfPerGame = st.gf/played, gaPerGame = st.ga/played;
-  const attAdj = Math.max(-10, Math.min(10, (gfPerGame-1.3)*6));
-  const defAdj = Math.max(-10, Math.min(10, (1.3-gaPerGame)*6));
-  const att = Math.max(35, Math.min(95, Math.round(ovr + attAdj)));
-  const def = Math.max(35, Math.min(95, Math.round(ovr + defAdj)));
-  return {att, def, mid:ovr, ovr};
+  // No manual rating: everyone starts flat and neutral. Actual strength for
+  // an unrated participant comes entirely from calcInCompStrength, which
+  // only looks at results inside one specific tournament — never career
+  // totals, and never friendlies. That's what keeps winning one tournament
+  // (or a bunch of friendlies) from making a team "good" anywhere else.
+  return {att:60, def:60, mid:60, ovr:60};
 }
 
 // Blends overall rating with in-tournament form, so predictions reflect
@@ -623,7 +632,10 @@ function initSim(hId, aId, isKnockout, tournamentId){
   const a = db.participants.find(p=>p.id===aId);
   const t = tournamentId ? db.tournaments.find(x=>x.id===tournamentId) : null;
   const homeAdv = (t&&t.homeAdvantage===false) ? 0 : 5; // default on
-  const hs = calcStrength(h), as = calcStrength(a);
+  // Use in-competition strength (not raw calcStrength) so the actual
+  // simulation — not just the pre-match prediction percentages — is driven
+  // by form within this tournament only.
+  const hs = calcInCompStrength(h, tournamentId), as = calcInCompStrength(a, tournamentId);
   const hMid = hs.mid + homeAdv;
   const aMid = as.mid;
   const totalMid = hMid + aMid;
@@ -1046,6 +1058,268 @@ function closeLive(){
   }
   sim=null;
   render();
+}
+
+/* =====================================================================
+   SETTINGS
+   ===================================================================== */
+function openSettings(){
+  document.getElementById('settings-modal-body').innerHTML = renderSettingsModal();
+  document.getElementById('settings-modal').classList.remove('hidden');
+}
+function closeSettings(){
+  document.getElementById('settings-modal').classList.add('hidden');
+}
+function renderSettingsModal(){
+  const on = db.settings.simulationMode!==false;
+  return `
+    <div class="card-title" style="margin-bottom:14px;">Settings</div>
+    <div class="form-group">
+      <label class="switch-row" style="padding:10px 2px;border-bottom:1px solid var(--border);">
+        <div>
+          <div class="switch-label" style="font-size:.88rem;">Simulate matches</div>
+          <div class="switch-sub">${on ? 'Matches play out automatically with live commentary.' : 'You type in the final score yourself for every match.'}</div>
+        </div>
+        <div class="switch">
+          <input type="checkbox" id="settings-sim-toggle" ${on?'checked':''} onchange="setSimulationMode(this.checked)">
+          <div class="switch-track"><div class="switch-thumb"></div></div>
+        </div>
+      </label>
+      <div style="font-size:.68rem;color:var(--text3);margin-top:8px;line-height:1.4;">
+        Turn this off if you're running real matches yourself (in a video game, on the pitch, wherever) and just want this app to track the bracket, standings and results.
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:16px;">
+      <div style="font-weight:700;font-size:.88rem;margin-bottom:4px;">How strength ratings work</div>
+      <div style="font-size:.72rem;color:var(--text3);line-height:1.5;">
+        A participant with no manual rating isn't tracked as "good" or "bad" long-term. Their in-app strength is based only on results inside the current tournament, so everyone starts level in every new tournament or season, no matter what happened before. Friendlies and past tournaments never carry over. Manually-set ratings (OVR) are the one exception, since you're choosing those yourself.
+      </div>
+    </div>
+    <button class="btn btn-outline btn-full" style="margin-top:16px;" onclick="closeSettings()">Done</button>
+  `;
+}
+function setSimulationMode(val){
+  db.settings.simulationMode = !!val;
+  save();
+  document.getElementById('settings-modal-body').innerHTML = renderSettingsModal();
+  render();
+  toast(val ? 'Matches will be simulated' : 'Matches now use manual score entry');
+}
+
+/* =====================================================================
+   MANUAL RESULT ENTRY
+   ===================================================================== */
+// Mirrors launchLive's role, but instead of running the sim engine it
+// collects a score (and, optionally, everything else — scorers, cards,
+// stats) typed in by hand, then hands off to the exact same completion
+// callback launchLive would have used. Callers don't need to know which
+// mode is active.
+let manualEntry = null;
+let manualCb = null;
+function openManualEntry(hId, aId, isKnockout, tournamentId, onComplete, legContext=null){
+  const h = db.participants.find(p=>p.id===hId);
+  const a = db.participants.find(p=>p.id===aId);
+  if(!h||!a) return;
+  manualCb = onComplete;
+  manualEntry = {
+    home:h, away:a, isKnockout, isTeamMode:!!(h.players&&a.players),
+    hScore:0, aScore:0, aet:false, penalties:false, penH:0, penA:0,
+    showAdvanced:false,
+    scorers:[], cards:[],
+    stats:{hShots:'',aShots:'',hSoT:'',aSoT:'',hCorners:'',aCorners:'',hFouls:'',aFouls:'',hSaves:'',aSaves:'',hPoss:'',aPoss:''}
+  };
+  document.getElementById('manual-modal-body').innerHTML = renderManualEntry();
+  document.getElementById('manual-modal').classList.remove('hidden');
+}
+function closeManualEntry(){
+  document.getElementById('manual-modal').classList.add('hidden');
+  manualEntry = null;
+  manualCb = null;
+}
+function reRenderManual(){
+  if(!manualEntry) return;
+  document.getElementById('manual-modal-body').innerHTML = renderManualEntry();
+}
+function manualSetScore(side, val){
+  if(!manualEntry) return;
+  const n = Math.max(0, parseInt(val)||0);
+  if(side==='h') manualEntry.hScore = n; else manualEntry.aScore = n;
+}
+function manualToggle(field, val){
+  if(!manualEntry) return;
+  manualEntry[field] = val;
+  reRenderManual();
+}
+function manualSetPen(side, val){
+  if(!manualEntry) return;
+  const n = Math.max(0, parseInt(val)||0);
+  if(side==='h') manualEntry.penH = n; else manualEntry.penA = n;
+}
+function manualAddScorer(){
+  manualEntry.scorers.push({side:'h', name:'', minute:''});
+  reRenderManual();
+}
+function manualRemoveScorer(idx){
+  manualEntry.scorers.splice(idx,1);
+  reRenderManual();
+}
+function manualUpdateScorer(idx, field, val){
+  if(!manualEntry.scorers[idx]) return;
+  manualEntry.scorers[idx][field] = val;
+}
+function manualAddCard(){
+  manualEntry.cards.push({side:'h', name:'', type:'yellow'});
+  reRenderManual();
+}
+function manualRemoveCard(idx){
+  manualEntry.cards.splice(idx,1);
+  reRenderManual();
+}
+function manualUpdateCard(idx, field, val){
+  if(!manualEntry.cards[idx]) return;
+  manualEntry.cards[idx][field] = val;
+}
+function manualUpdateStat(field, val){
+  manualEntry.stats[field] = val;
+}
+function renderManualEntry(){
+  const m = manualEntry;
+  const teamMode = m.isTeamMode;
+  return `
+    <div class="card-title">Enter Result</div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin:14px 0;">
+      <div style="flex:1;text-align:center;">
+        <div style="font-weight:700;font-size:.85rem;margin-bottom:6px;">${m.home.name}</div>
+        <input type="number" min="0" inputmode="numeric" value="${m.hScore}" style="text-align:center;font-size:1.3rem;font-weight:800;" onchange="manualSetScore('h',this.value)">
+      </div>
+      <div style="font-weight:700;color:var(--text3);">–</div>
+      <div style="flex:1;text-align:center;">
+        <div style="font-weight:700;font-size:.85rem;margin-bottom:6px;">${m.away.name}</div>
+        <input type="number" min="0" inputmode="numeric" value="${m.aScore}" style="text-align:center;font-size:1.3rem;font-weight:800;" onchange="manualSetScore('a',this.value)">
+      </div>
+    </div>
+    ${m.isKnockout?`
+      <div class="form-row form-row-2" style="margin-bottom:10px;">
+        <label class="check-item" style="display:flex;align-items:center;gap:8px;font-size:.78rem;"><input type="checkbox" ${m.aet?'checked':''} onchange="manualToggle('aet',this.checked)"> Went to extra time</label>
+        <label class="check-item" style="display:flex;align-items:center;gap:8px;font-size:.78rem;"><input type="checkbox" ${m.penalties?'checked':''} onchange="manualToggle('penalties',this.checked)"> Decided on penalties</label>
+      </div>
+      ${m.penalties?`
+        <div class="form-row form-row-2" style="margin-bottom:10px;">
+          <div class="form-group" style="margin-bottom:0;"><label class="form-label">${m.home.name} pens</label><input type="number" min="0" value="${m.penH}" onchange="manualSetPen('h',this.value)"></div>
+          <div class="form-group" style="margin-bottom:0;"><label class="form-label">${m.away.name} pens</label><input type="number" min="0" value="${m.penA}" onchange="manualSetPen('a',this.value)"></div>
+        </div>
+      `:''}
+    `:''}
+    <div class="divider"></div>
+    <button class="btn btn-ghost btn-sm" style="padding-left:0;" onclick="manualToggle('showAdvanced',${!m.showAdvanced})">${m.showAdvanced?'▾':'▸'} Add scorers, cards &amp; match stats (optional)</button>
+    ${m.showAdvanced?`
+      <div style="margin-top:10px;">
+        <div class="form-label" style="margin-bottom:6px;">Scorers</div>
+        ${m.scorers.map((s,i)=>`
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+            <select style="flex:0 0 84px;" onchange="manualUpdateScorer(${i},'side',this.value)">
+              <option value="h" ${s.side==='h'?'selected':''}>${m.home.name}</option>
+              <option value="a" ${s.side==='a'?'selected':''}>${m.away.name}</option>
+            </select>
+            <input placeholder="Scorer name" value="${s.name}" style="flex:1;" onchange="manualUpdateScorer(${i},'name',this.value)">
+            <input placeholder="Min" type="number" min="0" max="130" value="${s.minute}" style="flex:0 0 56px;" onchange="manualUpdateScorer(${i},'minute',this.value)">
+            <button class="btn-icon" style="flex:0 0 auto;" onclick="manualRemoveScorer(${i})">✕</button>
+          </div>
+        `).join('')}
+        <button class="btn btn-outline btn-sm" onclick="manualAddScorer()">+ Add Scorer</button>
+
+        ${teamMode?`
+          <div class="form-label" style="margin:14px 0 6px;">Cards</div>
+          ${m.cards.map((c,i)=>`
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+              <select style="flex:0 0 84px;" onchange="manualUpdateCard(${i},'side',this.value)">
+                <option value="h" ${c.side==='h'?'selected':''}>${m.home.name}</option>
+                <option value="a" ${c.side==='a'?'selected':''}>${m.away.name}</option>
+              </select>
+              <input placeholder="Player name" value="${c.name}" style="flex:1;" onchange="manualUpdateCard(${i},'name',this.value)">
+              <select style="flex:0 0 90px;" onchange="manualUpdateCard(${i},'type',this.value)">
+                <option value="yellow" ${c.type==='yellow'?'selected':''}>🟨 Yellow</option>
+                <option value="red" ${c.type==='red'?'selected':''}>🟥 Red</option>
+              </select>
+              <button class="btn-icon" style="flex:0 0 auto;" onclick="manualRemoveCard(${i})">✕</button>
+            </div>
+          `).join('')}
+          <button class="btn btn-outline btn-sm" onclick="manualAddCard()">+ Add Card</button>
+        `:''}
+
+        <div class="form-label" style="margin:14px 0 6px;">Match stats</div>
+        <div class="form-row form-row-2">
+          <input placeholder="${m.home.name} possession %" type="number" min="0" max="100" value="${m.stats.hPoss}" onchange="manualUpdateStat('hPoss',this.value)">
+          <input placeholder="${m.away.name} possession %" type="number" min="0" max="100" value="${m.stats.aPoss}" onchange="manualUpdateStat('aPoss',this.value)">
+          <input placeholder="${m.home.name} shots" type="number" min="0" value="${m.stats.hShots}" onchange="manualUpdateStat('hShots',this.value)">
+          <input placeholder="${m.away.name} shots" type="number" min="0" value="${m.stats.aShots}" onchange="manualUpdateStat('aShots',this.value)">
+          <input placeholder="${m.home.name} shots on target" type="number" min="0" value="${m.stats.hSoT}" onchange="manualUpdateStat('hSoT',this.value)">
+          <input placeholder="${m.away.name} shots on target" type="number" min="0" value="${m.stats.aSoT}" onchange="manualUpdateStat('aSoT',this.value)">
+          ${teamMode?`
+          <input placeholder="${m.home.name} corners" type="number" min="0" value="${m.stats.hCorners}" onchange="manualUpdateStat('hCorners',this.value)">
+          <input placeholder="${m.away.name} corners" type="number" min="0" value="${m.stats.aCorners}" onchange="manualUpdateStat('aCorners',this.value)">
+          <input placeholder="${m.home.name} saves" type="number" min="0" value="${m.stats.hSaves}" onchange="manualUpdateStat('hSaves',this.value)">
+          <input placeholder="${m.away.name} saves" type="number" min="0" value="${m.stats.aSaves}" onchange="manualUpdateStat('aSaves',this.value)">
+          `:''}
+          <input placeholder="${m.home.name} fouls" type="number" min="0" value="${m.stats.hFouls}" onchange="manualUpdateStat('hFouls',this.value)">
+          <input placeholder="${m.away.name} fouls" type="number" min="0" value="${m.stats.aFouls}" onchange="manualUpdateStat('aFouls',this.value)">
+        </div>
+      </div>
+    `:''}
+    <div style="display:flex;gap:8px;margin-top:16px;">
+      <button class="btn btn-outline btn-full" onclick="closeManualEntry()">Cancel</button>
+      <button class="btn btn-primary btn-full" onclick="submitManualEntry()">Save Result</button>
+    </div>
+  `;
+}
+function submitManualEntry(){
+  const m = manualEntry;
+  if(!m) return;
+  if(m.penalties && m.penH===m.penA){ toast("Penalty shootouts can't end level"); return; }
+  const hasStat = v => v!=='' && v!=null && !isNaN(v);
+  const numOrZero = v => hasStat(v) ? parseInt(v) : 0;
+  const anyStatsEntered = Object.values(m.stats).some(hasStat);
+  const scorerLog = m.scorers.filter(s=>s.name.trim()).map(s=>({
+    team: s.side, scorerId:null, scorerName: s.name.trim(), assistId:null, assistName:null,
+    minute: s.minute?parseInt(s.minute):null
+  }));
+  const cardLog = m.cards.filter(c=>c.name.trim()).map(c=>({
+    team: c.side, playerId:null, playerName: c.name.trim(), type: c.type,
+    minute: null
+  }));
+  // Build a simple timeline out of whatever was entered, so the recap isn't
+  // empty just because this match wasn't simulated minute-by-minute.
+  const events = [];
+  scorerLog.forEach(s=>{
+    const who = s.team==='h'?m.home.name:m.away.name;
+    events.unshift({min: s.minute??'?', cls:'tl-goal', text:`⚽ Goal! ${s.scorerName} (${who})`});
+  });
+  cardLog.forEach(c=>{
+    const who = c.team==='h'?m.home.name:m.away.name;
+    events.unshift({min:'?', cls: c.type==='red'?'tl-red':'tl-yellow', text:`${c.type==='red'?'🟥':'🟨'} ${c.playerName} (${who})`});
+  });
+  const extra = {
+    aet: m.isKnockout && m.aet,
+    penalties: m.isKnockout && m.penalties,
+    penH: m.penalties?m.penH:0,
+    penA: m.penalties?m.penA:0,
+    penWinner: m.penalties ? (m.penH>m.penA?'h':'a') : undefined,
+    stats: anyStatsEntered ? {
+      hShots:numOrZero(m.stats.hShots), aShots:numOrZero(m.stats.aShots),
+      hSoT:numOrZero(m.stats.hSoT), aSoT:numOrZero(m.stats.aSoT),
+      hCorners:numOrZero(m.stats.hCorners), aCorners:numOrZero(m.stats.aCorners),
+      hFouls:numOrZero(m.stats.hFouls), aFouls:numOrZero(m.stats.aFouls),
+      hSaves:numOrZero(m.stats.hSaves), aSaves:numOrZero(m.stats.aSaves),
+      hPoss:hasStat(m.stats.hPoss)?parseInt(m.stats.hPoss):50,
+      aPoss:hasStat(m.stats.aPoss)?parseInt(m.stats.aPoss):50
+    } : null,
+    scorerLog, cardLog, events:[]
+  };
+  const hS = m.hScore, aS = m.aScore;
+  const cb = manualCb;
+  document.getElementById('manual-modal').classList.add('hidden');
+  manualEntry = null; manualCb = null;
+  if(cb) cb(hS, aS, extra);
 }
 
 /* =====================================================================
@@ -2802,7 +3076,7 @@ function renderFriendlies(app){
         ${name(friendlyHomeId)} ${pred.hWin}% · Draw ${pred.draw}% · ${name(friendlyAwayId)} ${pred.aWin}%
         <div class="pred-bar"><div class="pred-h" style="width:${pred.hWin}%"></div><div class="pred-d" style="width:${pred.draw}%"></div><div class="pred-a" style="width:${pred.aWin}%"></div></div>
       </div>`:''}
-      <button class="btn btn-primary btn-full" style="margin-top:12px;" ${canStart?'':'disabled style="opacity:.5;"'} onclick="startFriendly()">▶ Kick Off</button>
+      <button class="btn btn-primary btn-full" style="margin-top:12px;" ${canStart?'':'disabled style="opacity:.5;"'} onclick="startFriendly()">${db.settings.simulationMode!==false?'▶ Kick Off':'✎ Enter Result'}</button>
       `}
     </div>
     <div class="section-header"><div class="section-title">Friendly History</div>
@@ -2837,7 +3111,8 @@ function renderFriendlies(app){
 function startFriendly(){
   if(!friendlyHomeId || !friendlyAwayId || friendlyHomeId===friendlyAwayId) return;
   simIsFriendly = true;
-  launchLive(friendlyHomeId, friendlyAwayId, false, null, (hS,aS,extra)=>{
+  const playFn = db.settings.simulationMode!==false ? launchLive : openManualEntry;
+  playFn(friendlyHomeId, friendlyAwayId, false, null, (hS,aS,extra)=>{
     completeFriendly(friendlyHomeId, friendlyAwayId, hS, aS, extra);
   });
 }
@@ -3152,9 +3427,10 @@ function renderTournamentOverview(t){
     </div>`;
   }
 
-  // Simulate all remaining button
+  // Simulate all remaining button — only makes sense in simulation mode;
+  // manual mode means every match needs a score typed in by hand.
   const remaining = getRemainingMatches(t);
-  if(remaining.length>0){
+  if(remaining.length>0 && db.settings.simulationMode!==false){
     html+=`<div style="display:flex;gap:8px;margin-bottom:12px;">
       <button class="btn btn-outline btn-full" onclick="simAllRemaining('${t.id}')">⚡ Simulate All Remaining</button>
     </div>`;
@@ -3593,7 +3869,7 @@ function matchCardHTML(m, tId, showResult=false, isKO=false, groupId=null){
     ${m.played?`<div style="font-size:.65rem;color:var(--text3);text-align:center;margin-top:6px;">Tap for match recap ›</div>`:''}
     ${!m.played?`<div class="match-footer">
       ${playable
-        ? `<button class="btn btn-outline btn-sm btn-full" onclick="${onSim}">▶ Simulate</button>`
+        ? `<button class="btn btn-outline btn-sm btn-full" onclick="${onSim}">${db.settings.simulationMode!==false?'▶ Simulate':'✎ Enter Result'}</button>`
         : `<button class="btn btn-outline btn-sm btn-full" disabled style="opacity:.45;cursor:not-allowed;" title="${lockedByThirdPlace?'Play the third place match first':lockedByLeg1?'Play Leg 1 first':'Finish earlier matchdays first'}">🔒 ${lockedByThirdPlace?'Play 3rd place match first':lockedByLeg1?'Play Leg 1 first':'Locked — earlier matchday pending'}</button>`}
     </div>`:''}
   </div>`;
@@ -3720,7 +3996,8 @@ function triggerSim(tId, matchId, isKO=false, groupId=null){
   // actually level after both legs — and the person watches it happen live
   // instead of the bracket just updating after they close the modal.
   const simAsKO = isKO && m.legNum!==1;
-  launchLive(m.homeId,m.awayId,simAsKO,tId,(hS,aS,extra)=>{
+  const playFn = db.settings.simulationMode!==false ? launchLive : openManualEntry;
+  playFn(m.homeId,m.awayId,simAsKO,tId,(hS,aS,extra)=>{
     applyResult(tId,matchId,hS,aS,extra,groupId);
     save(); render();
   }, legContext);
